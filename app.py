@@ -7,7 +7,7 @@ from flask import Flask, render_template_string, request, redirect, url_for, ses
 from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
-app.secret_key = os.environ.get ('SECRET_KEY', 'workday_enterprise_leave_key_v5')
+app.secret_key = 'workday_enterprise_leave_key_v5'
 DATABASE = 'leave_tracker.db'
 
 # --- OPTION 1: LIVE SINGAPORE PUBLIC HOLIDAYS (DATA.GOV.SG) ---
