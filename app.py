@@ -124,7 +124,7 @@ def init_db():
 
         settings_defaults = {
             'carry_forward_percent': '50',
-            'carry_forward_expiry_month': '3',
+            'carry_forward_expiry_month': '12',
             'carry_forward_expiry_day': '31'
         }
         for key, val in settings_defaults.items():
@@ -220,10 +220,14 @@ def check_carried_over_expired(user_id, leave_type_id, current_year):
         settings_rows = db.execute('SELECT * FROM settings').fetchall()
         settings = {r['key']: r['value'] for r in settings_rows}
         
-        exp_m = int(settings.get('carry_forward_expiry_month', 3))
-        exp_d = int(settings.get('carry_forward_expiry_day', 31))
-        expiry_date = datetime.date(current_year, exp_m, exp_d)
+        try:
+            exp_m = int(settings.get('carry_forward_expiry_month', 12))
+            exp_d = int(settings.get('carry_forward_expiry_day', 31))
+            expiry_date = datetime.date(current_year, exp_m, exp_d)
+        except ValueError:
+            expiry_date = datetime.date(current_year, 12, 31)
         
+        # Carried-over leave expires ONLY after today passes the set expiry cutoff date
         if datetime.date.today() > expiry_date:
             return True
     return False
@@ -396,7 +400,7 @@ EMPLOYEE_HTML = BASE_HTML.replace('{% block content %}{% endblock %}', '''
         <div class="wd-card">
             <h3>{{ b.leave_name }}</h3>
             <div class="val">{{ b.remaining }} <span style="font-size:16px; font-weight:normal;">Days</span></div>
-            <div class="sub">Allocated: {{ b.allocated_days }}d | Used: {{ b.used_days }}d {% if b.carried_over_days > 0 %} | Carried: {{ b.carried_over_days }}d{% endif %}</div>
+            <div class="sub">Allocated: {{ b.allocated_days }}d | Used: {{ b.used_days }}d | Carried: <b>{{ b.carried_over_days }}d</b></div>
         </div>
         {% endfor %}
     </div>
@@ -544,12 +548,11 @@ EMPLOYEE_HTML = BASE_HTML.replace('{% block content %}{% endblock %}', '''
     </script>
 ''')
 
-# --- REVISED MANAGER SIDE WITH HISTORICAL APPROVAL/REJECTED REQUESTS ---
 MANAGER_HTML = BASE_HTML.replace('{% block content %}{% endblock %}', '''
     <div class="page-title">
         <div>
             <h1>Manager Inbox & Absence Oversight</h1>
-            <div class="subtitle">Review team time-off submissions and track approval history</div>
+            <div class="subtitle">Review team time-off submissions, monitor employee leave balances, and track approval history</div>
         </div>
     </div>
 
@@ -589,7 +592,43 @@ MANAGER_HTML = BASE_HTML.replace('{% block content %}{% endblock %}', '''
         </table>
     </div>
 
-    <!-- ADDED MANAGER REQUEST HISTORY TABLE -->
+    <!-- EMPLOYEE LEAVE REMAINING & CARRY FORWARD TRACKING -->
+    <div class="wd-panel">
+        <div class="wd-panel-header">Employee Leave Remainings & Carry-Forward Tracking</div>
+        <table>
+            <thead>
+                <tr>
+                    <th>Worker Name</th>
+                    <th>Leave Type</th>
+                    <th>Allocated</th>
+                    <th>Used</th>
+                    <th>Carried Over</th>
+                    <th>Total Remaining Balance</th>
+                    <th>Expiry Date</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for eb in employee_balances %}
+                <tr>
+                    <td><b>{{ eb.employee_name }}</b></td>
+                    <td>{{ eb.leave_name }}</td>
+                    <td>{{ eb.allocated_days }}d</td>
+                    <td>{{ eb.used_days }}d</td>
+                    <td><b>{{ eb.carried_over_days }}d</b></td>
+                    <td>
+                        <span class="wd-badge {% if eb.remaining > 2 %}wd-badge-Approved{% elif eb.remaining > 0 %}wd-badge-Pending{% else %}wd-badge-Rejected{% endif %}">
+                            <b>{{ eb.remaining }} Days</b>
+                        </span>
+                    </td>
+                    <td><small style="color: var(--wd-gray-text);">{{ eb.expiry_date }}</small></td>
+                </tr>
+                {% else %}
+                <tr><td colspan="7" style="color: var(--wd-gray-text);">No employee balance records found.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
     <div class="wd-panel">
         <div class="wd-panel-header">Processed Request History (Approved / Rejected)</div>
         <table>
@@ -623,12 +662,11 @@ MANAGER_HTML = BASE_HTML.replace('{% block content %}{% endblock %}', '''
     </div>
 ''')
 
-# --- REVISED ADMIN HTML WITH EDITABLE LEAVE TYPES & REMOVABLE LEAVE REQUESTS ---
 ADMIN_HTML = BASE_HTML.replace('{% block content %}{% endblock %}', '''
     <div class="page-title">
         <div>
             <h1>System Administrator Control Panel</h1>
-            <div class="subtitle">Configure settings, leave types, rules, leave requests, and manage user accounts</div>
+            <div class="subtitle">Configure settings, leave types, rules, leave requests, and manage user balances</div>
         </div>
     </div>
 
@@ -654,7 +692,42 @@ ADMIN_HTML = BASE_HTML.replace('{% block content %}{% endblock %}', '''
         </form>
     </div>
 
-    <!-- Manage All Employee Leave Applications (Editable & Removable) -->
+    <!-- MANAGE EMPLOYEE LEAVE BALANCES & CARRY-FORWARD DAYS -->
+    <div class="wd-panel">
+        <div class="wd-panel-header">Manage Employee Leave Balances & Carry-Forward Days</div>
+        <table>
+            <thead>
+                <tr>
+                    <th>Worker Name</th>
+                    <th>Leave Type</th>
+                    <th>Allocated Days</th>
+                    <th>Used Days</th>
+                    <th>Carried-Over Days</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for b in all_user_balances %}
+                <tr>
+                    <form method="POST" action="/admin/update_user_balance/{{ b.id }}">
+                        <td><b>{{ b.employee_name }}</b></td>
+                        <td>{{ b.leave_name }}</td>
+                        <td><input type="number" step="0.5" name="allocated_days" value="{{ b.allocated_days }}" style="width: 80px; padding:4px 8px;" required></td>
+                        <td><input type="number" step="0.5" name="used_days" value="{{ b.used_days }}" style="width: 80px; padding:4px 8px;" required></td>
+                        <td><input type="number" step="0.5" name="carried_over_days" value="{{ b.carried_over_days }}" style="width: 80px; padding:4px 8px;" required></td>
+                        <td>
+                            <button type="submit" class="btn btn-sm btn-success">Update Balance</button>
+                        </td>
+                    </form>
+                </tr>
+                {% else %}
+                <tr><td colspan="6" style="color: var(--wd-gray-text);">No balance records available.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Editable & Removable System Leave Requests -->
     <div class="wd-panel">
         <div class="wd-panel-header">Editable & Removable System Leave Requests</div>
         <table>
@@ -915,11 +988,18 @@ ADMIN_EDIT_USER_HTML = BASE_HTML.replace('{% block content %}{% endblock %}', ''
 @login_required
 def index():
     if session['role'] == 'admin':
+        current_year = datetime.date.today().year
         with get_db() as db:
             leave_types = db.execute('SELECT * FROM leave_types').fetchall()
             users = db.execute('SELECT * FROM users ORDER BY id DESC').fetchall()
+            
+            # Sync user balances
+            for u in users:
+                sync_user_balances(u['id'], u['join_date'])
+
             settings_rows = db.execute('SELECT * FROM settings').fetchall()
             settings = {r['key']: r['value'] for r in settings_rows}
+            
             all_requests = db.execute('''
                 SELECT l.*, u.name as employee_name, lt.name as leave_name
                 FROM leave_requests l
@@ -927,9 +1007,21 @@ def index():
                 JOIN leave_types lt ON l.leave_type_id = lt.id
                 ORDER BY l.id DESC
             ''').fetchall()
-        return render_template_string(ADMIN_HTML, leave_types=leave_types, users=users, settings=settings, all_requests=all_requests)
+
+            all_user_balances = db.execute('''
+                SELECT b.id, u.name as employee_name, lt.name as leave_name,
+                       b.allocated_days, b.used_days, b.carried_over_days
+                FROM user_balances b
+                JOIN users u ON b.user_id = u.id
+                JOIN leave_types lt ON b.leave_type_id = lt.id
+                WHERE b.year = ?
+                ORDER BY u.name, lt.name
+            ''', (current_year,)).fetchall()
+
+        return render_template_string(ADMIN_HTML, leave_types=leave_types, users=users, settings=settings, all_requests=all_requests, all_user_balances=all_user_balances)
 
     elif session['role'] == 'manager':
+        current_year = datetime.date.today().year
         with get_db() as db:
             pending = db.execute('''
                 SELECT l.*, u.name as employee_name, lt.name as leave_name 
@@ -939,6 +1031,7 @@ def index():
                 WHERE l.status = 'Pending'
                 ORDER BY l.id DESC
             ''').fetchall()
+            
             history = db.execute('''
                 SELECT l.*, u.name as employee_name, lt.name as leave_name 
                 FROM leave_requests l 
@@ -947,7 +1040,48 @@ def index():
                 WHERE l.status IN ('Approved', 'Rejected')
                 ORDER BY l.id DESC
             ''').fetchall()
-        return render_template_string(MANAGER_HTML, pending=pending, history=history)
+
+            employees = db.execute("SELECT id, join_date FROM users WHERE role = 'employee'").fetchall()
+            for emp in employees:
+                sync_user_balances(emp['id'], emp['join_date'])
+
+            raw_balances = db.execute('''
+                SELECT u.name as employee_name, lt.name as leave_name, lt.id as leave_type_id,
+                       b.allocated_days, b.used_days, b.carried_over_days, u.id as user_id
+                FROM users u
+                CROSS JOIN leave_types lt
+                LEFT JOIN user_balances b ON b.user_id = u.id AND b.leave_type_id = lt.id AND b.year = ?
+                WHERE u.role = 'employee'
+                ORDER BY u.name, lt.name
+            ''', (current_year,)).fetchall()
+
+            settings_rows = db.execute('SELECT * FROM settings').fetchall()
+            settings = {r['key']: r['value'] for r in settings_rows}
+            exp_m = settings.get('carry_forward_expiry_month', '12')
+            exp_d = settings.get('carry_forward_expiry_day', '31')
+            expiry_str = f"{current_year}-{exp_m.zfill(2)}-{exp_d.zfill(2)}"
+
+            employee_balances = []
+            for b in raw_balances:
+                carried = b['carried_over_days'] or 0.0
+                if check_carried_over_expired(b['user_id'], b['leave_type_id'], current_year):
+                    carried = 0.0
+
+                allocated = b['allocated_days'] or 0.0
+                used = b['used_days'] or 0.0
+                rem = (allocated + carried) - used
+
+                employee_balances.append({
+                    'employee_name': b['employee_name'],
+                    'leave_name': b['leave_name'],
+                    'allocated_days': allocated,
+                    'used_days': used,
+                    'carried_over_days': carried,
+                    'remaining': max(0.0, rem),
+                    'expiry_date': expiry_str
+                })
+
+        return render_template_string(MANAGER_HTML, pending=pending, history=history, employee_balances=employee_balances)
 
     else: # Employee
         current_year = datetime.date.today().year
@@ -1115,7 +1249,28 @@ def action_leave(req_id):
     flash(f"Request #{req_id} marked as {status}.")
     return redirect(url_for('index'))
 
-# --- ADMIN ACTIONS: EDIT/DELETE LEAVE & LEAVE TYPES ---
+# --- ADMIN ACTIONS ---
+@app.route('/admin/update_user_balance/<int:bal_id>', methods=['POST'])
+@login_required
+def admin_update_user_balance(bal_id):
+    if session['role'] != 'admin':
+        return "Unauthorized", 403
+
+    allocated = float(request.form.get('allocated_days', 0))
+    used = float(request.form.get('used_days', 0))
+    carried = float(request.form.get('carried_over_days', 0))
+
+    with get_db() as db:
+        db.execute('''
+            UPDATE user_balances 
+            SET allocated_days = ?, used_days = ?, carried_over_days = ?
+            WHERE id = ?
+        ''', (allocated, used, carried, bal_id))
+        db.commit()
+
+    flash("User leave balance & carry-forward days updated successfully.")
+    return redirect(url_for('index'))
+
 @app.route('/admin/delete_leave/<int:req_id>')
 @login_required
 def admin_delete_leave(req_id):
@@ -1126,7 +1281,6 @@ def admin_delete_leave(req_id):
     with get_db() as db:
         req = db.execute("SELECT * FROM leave_requests WHERE id = ?", (req_id,)).fetchone()
         if req:
-            # Revert used balance if deleting an approved request
             if req['status'] == 'Approved':
                 db.execute('''
                     UPDATE user_balances 
@@ -1210,7 +1364,6 @@ def admin_edit_leave_type(lt_id):
     with get_db() as db:
         db.execute('UPDATE leave_types SET default_days = ? WHERE id = ?', (new_default_days, lt_id))
         
-        # Recalculate allocated balances for all users based on updated default days
         users = db.execute('SELECT id, join_date FROM users').fetchall()
         current_year = datetime.date.today().year
         for u in users:
