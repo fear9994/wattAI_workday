@@ -1,4 +1,3 @@
-
 import datetime
 import sqlite3
 import requests
@@ -33,7 +32,6 @@ def get_cached_holidays():
         if rows:
             return {r['date_str']: r['holiday_name'] for r in rows}
     
-    # Fetch from API and cache if table is empty
     live_holidays = fetch_sg_public_holidays_from_gov()
     if live_holidays:
         with get_db() as db:
@@ -125,7 +123,8 @@ def init_db():
         settings_defaults = {
             'carry_forward_percent': '50',
             'carry_forward_expiry_month': '12',
-            'carry_forward_expiry_day': '31'
+            'carry_forward_expiry_day': '31',
+            'enable_prorate': 'on'  # 'on' or 'off'
         }
         for key, val in settings_defaults.items():
             db.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', (key, val))
@@ -185,7 +184,17 @@ def calculate_sg_leave_days(start_str, end_str, leave_type_name, half_day_option
     return working_days
 
 def calculate_prorated_days(default_days, join_date_str, current_year):
+    with get_db() as db:
+        val = db.execute("SELECT value FROM settings WHERE key = 'enable_prorate'").fetchone()
+        enable_prorate = val['value'] if val else 'on'
+
     join_date = datetime.datetime.strptime(join_date_str, '%Y-%m-%d').date()
+
+    # If Pro-rate is turned OFF, give full default days regardless of join date for the current year
+    if enable_prorate == 'off':
+        return float(default_days)
+
+    # If Pro-rate is turned ON (Calendar Year pro-rating)
     if join_date.year < current_year:
         return float(default_days)
     elif join_date.year > current_year:
@@ -227,7 +236,6 @@ def check_carried_over_expired(user_id, leave_type_id, current_year):
         except ValueError:
             expiry_date = datetime.date(current_year, 12, 31)
         
-        # Carried-over leave expires ONLY after today passes the set expiry cutoff date
         if datetime.date.today() > expiry_date:
             return True
     return False
@@ -391,7 +399,7 @@ EMPLOYEE_HTML = BASE_HTML.replace('{% block content %}{% endblock %}', '''
     <div class="page-title">
         <div>
             <h1>Request Absence</h1>
-            <div class="subtitle">Employment Join Date: <b>{{ user.join_date }}</b> (Pro-rated allocations applied)</div>
+            <div class="subtitle">Employment Join Date: <b>{{ user.join_date }}</b> (Pro-rated allocations applied based on admin system rules)</div>
         </div>
     </div>
 
@@ -666,15 +674,22 @@ ADMIN_HTML = BASE_HTML.replace('{% block content %}{% endblock %}', '''
     <div class="page-title">
         <div>
             <h1>System Administrator Control Panel</h1>
-            <div class="subtitle">Configure settings, leave types, rules, leave requests, and manage user balances</div>
+            <div class="subtitle">Configure settings, leave types, pro-rate controls, and manage user balances</div>
         </div>
     </div>
 
-    <!-- Rule Settings Panel -->
+    <!-- Rule & Pro-Rate Settings Panel -->
     <div class="wd-panel">
-        <div class="wd-panel-header">Annual Leave Carry-Forward Rules</div>
+        <div class="wd-panel-header">Leave Allocation & Pro-Rate Rule Settings</div>
         <form method="POST" action="/admin/update_settings">
             <div class="form-grid">
+                <div class="form-group">
+                    <label>Pro-Rated Leave System</label>
+                    <select name="enable_prorate">
+                        <option value="on" {% if settings.enable_prorate == 'on' %}selected{% endif %}>ON (Pro-rate based on join month to Dec 31)</option>
+                        <option value="off" {% if settings.enable_prorate == 'off' %}selected{% endif %}>OFF (Full allocation granted, no pro-rating)</option>
+                    </select>
+                </div>
                 <div class="form-group">
                     <label>Max Carry-Forward Percent (%)</label>
                     <input type="number" name="carry_forward_percent" value="{{ settings.carry_forward_percent }}" required min="0" max="100">
@@ -993,7 +1008,6 @@ def index():
             leave_types = db.execute('SELECT * FROM leave_types').fetchall()
             users = db.execute('SELECT * FROM users ORDER BY id DESC').fetchall()
             
-            # Sync user balances
             for u in users:
                 sync_user_balances(u['id'], u['join_date'])
 
@@ -1508,12 +1522,19 @@ def admin_update_settings():
         return "Unauthorized", 403
 
     with get_db() as db:
+        db.execute('REPLACE INTO settings (key, value) VALUES (?, ?)', ('enable_prorate', request.form['enable_prorate']))
         db.execute('REPLACE INTO settings (key, value) VALUES (?, ?)', ('carry_forward_percent', request.form['carry_forward_percent']))
         db.execute('REPLACE INTO settings (key, value) VALUES (?, ?)', ('carry_forward_expiry_month', request.form['carry_forward_expiry_month']))
         db.execute('REPLACE INTO settings (key, value) VALUES (?, ?)', ('carry_forward_expiry_day', request.form['carry_forward_expiry_day']))
+        
+        # Trigger full balance recalculation for all users based on new prorate setting
+        users = db.execute("SELECT id, join_date FROM users").fetchall()
+        for u in users:
+            sync_user_balances(u['id'], u['join_date'])
+            
         db.commit()
 
-    flash("Rule settings updated successfully.")
+    flash("Rule settings updated and employee leave allocations refreshed successfully.")
     return redirect(url_for('index'))
 
 if __name__ == '__main__':
