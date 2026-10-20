@@ -42,7 +42,7 @@ def get_cached_holidays():
 
 # --- DATABASE SETUP ---
 def get_db():
-    conn = sqlite3.connect(DATABASE)
+    conn = sqlite3.connect(DATABASE, timeout=10)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -124,7 +124,7 @@ def init_db():
             'carry_forward_percent': '50',
             'carry_forward_expiry_month': '12',
             'carry_forward_expiry_day': '31',
-            'enable_prorate': 'on'  # 'on' or 'off'
+            'enable_prorate': 'on'
         }
         for key, val in settings_defaults.items():
             db.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', (key, val))
@@ -190,11 +190,9 @@ def calculate_prorated_days(default_days, join_date_str, current_year):
 
     join_date = datetime.datetime.strptime(join_date_str, '%Y-%m-%d').date()
 
-    # If Pro-rate is turned OFF, give full default days regardless of join date for the current year
     if enable_prorate == 'off':
         return float(default_days)
 
-    # If Pro-rate is turned ON (Calendar Year pro-rating)
     if join_date.year < current_year:
         return float(default_days)
     elif join_date.year > current_year:
@@ -1521,18 +1519,19 @@ def admin_update_settings():
     if session['role'] != 'admin':
         return "Unauthorized", 403
 
+    # Step 1: Update settings and fetch users within a clean, isolated connection block
     with get_db() as db:
         db.execute('REPLACE INTO settings (key, value) VALUES (?, ?)', ('enable_prorate', request.form['enable_prorate']))
         db.execute('REPLACE INTO settings (key, value) VALUES (?, ?)', ('carry_forward_percent', request.form['carry_forward_percent']))
         db.execute('REPLACE INTO settings (key, value) VALUES (?, ?)', ('carry_forward_expiry_month', request.form['carry_forward_expiry_month']))
         db.execute('REPLACE INTO settings (key, value) VALUES (?, ?)', ('carry_forward_expiry_day', request.form['carry_forward_expiry_day']))
-        
-        # Trigger full balance recalculation for all users based on new prorate setting
-        users = db.execute("SELECT id, join_date FROM users").fetchall()
-        for u in users:
-            sync_user_balances(u['id'], u['join_date'])
-            
         db.commit()
+        
+        users = db.execute("SELECT id, join_date FROM users").fetchall()
+
+    # Step 2: Sync balances cleanly outside the primary settings update block to prevent DB locks
+    for u in users:
+        sync_user_balances(u['id'], u['join_date'])
 
     flash("Rule settings updated and employee leave allocations refreshed successfully.")
     return redirect(url_for('index'))
