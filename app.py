@@ -1000,6 +1000,13 @@ ADMIN_EDIT_USER_HTML = BASE_HTML.replace('{% block content %}{% endblock %}', ''
 @app.route('/')
 @login_required
 def index():
+    # Force HTTP headers to prevent browser caching of dynamic dashboard lists
+    response_headers = {
+        'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+        'Pragma': 'no-cache',
+        'Expires': '0'
+    }
+
     if session['role'] == 'admin':
         current_year = datetime.date.today().year
         with get_db() as db:
@@ -1030,7 +1037,7 @@ def index():
                 ORDER BY u.name, lt.name
             ''', (current_year,)).fetchall()
 
-        return render_template_string(ADMIN_HTML, leave_types=leave_types, users=users, settings=settings, all_requests=all_requests, all_user_balances=all_user_balances)
+        return render_template_string(ADMIN_HTML, leave_types=leave_types, users=users, settings=settings, all_requests=all_requests, all_user_balances=all_user_balances), 200, response_headers
 
     elif session['role'] == 'manager':
         current_year = datetime.date.today().year
@@ -1093,7 +1100,7 @@ def index():
                     'expiry_date': expiry_str
                 })
 
-        return render_template_string(MANAGER_HTML, pending=pending, history=history, employee_balances=employee_balances)
+        return render_template_string(MANAGER_HTML, pending=pending, history=history, employee_balances=employee_balances), 200, response_headers
 
     else: # Employee
         current_year = datetime.date.today().year
@@ -1132,7 +1139,7 @@ def index():
             ''', (session['user_id'],)).fetchall()
 
         sg_holidays = get_cached_holidays()
-        return render_template_string(EMPLOYEE_HTML, user=user, balances=balances, leave_types=leave_types, requests=requests_list, sg_holidays=sg_holidays)
+        return render_template_string(EMPLOYEE_HTML, user=user, balances=balances, leave_types=leave_types, requests=requests_list, sg_holidays=sg_holidays), 200, response_headers
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -1519,7 +1526,6 @@ def admin_update_settings():
     if session['role'] != 'admin':
         return "Unauthorized", 403
 
-    # Step 1: Update settings and fetch users within a clean, isolated connection block
     with get_db() as db:
         db.execute('REPLACE INTO settings (key, value) VALUES (?, ?)', ('enable_prorate', request.form['enable_prorate']))
         db.execute('REPLACE INTO settings (key, value) VALUES (?, ?)', ('carry_forward_percent', request.form['carry_forward_percent']))
@@ -1529,7 +1535,6 @@ def admin_update_settings():
         
         users = db.execute("SELECT id, join_date FROM users").fetchall()
 
-    # Step 2: Sync balances cleanly outside the primary settings update block to prevent DB locks
     for u in users:
         sync_user_balances(u['id'], u['join_date'])
 
