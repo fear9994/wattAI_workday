@@ -1,5 +1,5 @@
 import datetime
-Import os
+import os
 import sqlite3
 import requests
 from functools import wraps
@@ -8,8 +8,10 @@ from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
 app.secret_key = 'workday_enterprise_leave_key_v5'
+
+# --- ABSOLUTE PATH FIX FOR DATABASE ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATABASE = os.path.join(BASE_DIR,'leave_tracker.db')
+DATABASE = os.path.join(BASE_DIR, 'leave_tracker.db')
 
 # --- OPTION 1: LIVE SINGAPORE PUBLIC HOLIDAYS (DATA.GOV.SG) ---
 def fetch_sg_public_holidays_from_gov():
@@ -1002,7 +1004,6 @@ ADMIN_EDIT_USER_HTML = BASE_HTML.replace('{% block content %}{% endblock %}', ''
 @app.route('/')
 @login_required
 def index():
-    # Force HTTP headers to prevent browser caching of dynamic dashboard lists
     response_headers = {
         'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
         'Pragma': 'no-cache',
