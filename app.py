@@ -1,4 +1,5 @@
 import datetime
+Import os
 import sqlite3
 import requests
 from functools import wraps
@@ -7,7 +8,8 @@ from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
 app.secret_key = 'workday_enterprise_leave_key_v5'
-DATABASE = 'leave_tracker.db'
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATABASE = os.path.join(BASE_DIR,'leave_tracker.db')
 
 # --- OPTION 1: LIVE SINGAPORE PUBLIC HOLIDAYS (DATA.GOV.SG) ---
 def fetch_sg_public_holidays_from_gov():
